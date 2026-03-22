@@ -23,7 +23,7 @@ This project analyzes Netflix content data to uncover trends in movies and TV sh
 ## 📷 Dashboard Preview
 
 ### Tableau Dashboard
-![Tableau](netflix-tableau.png)
+![Tableau](netflix-tableu.png)
 
 ### Power BI Dashboard
 ![Power BI](netflix-powerbi.png)
