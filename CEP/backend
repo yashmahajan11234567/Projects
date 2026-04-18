@@ -1,0 +1,189 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split
+import os
+import joblib
+
+# Check if file exists
+filename = '/content/drive/MyDrive/SY/CEP/CEP/Datasets /Final_Demand_Prediction_With_Amenities.csv'
+if not os.path.isfile(filename):
+    try:
+        from google.colab import files
+        print("📁 File not found. Please upload 'Final_Demand_Prediction_With_Amenities.csv'")
+        uploaded = files.upload()
+    except:
+        print("📁 File not found. Please make sure the file exists in your working directory.")
+
+# Load the dataset
+df = pd.read_csv(filename)
+
+# Clean the 'BHK' column
+df['BHK'] = df['BHK'].astype(str).str.extract(r'(\d+)').astype(int)
+
+# Encode categorical columns
+label_encoder = LabelEncoder()
+df['Location'] = label_encoder.fit_transform(df['Location'])
+df['Gym Available'] = df['Gym Available'].apply(lambda x: 1 if x == 'Yes' else 0)
+df['Swimming Pool Available'] = df['Swimming Pool Available'].apply(lambda x: 1 if x == 'Yes' else 0)
+df['Water_Availability'] = df['Water_Availability'].apply(lambda x: 1 if x == 'Yes' else 0)
+df['Power_Backup'] = df['Power_Backup'].apply(lambda x: 1 if x == 'Yes' else 0)
+df['Near_School'] = df['Near_School'].apply(lambda x: 1 if x == 'Yes' else 0)
+df['RERA Registration Status'] = df['RERA Registration Status'].apply(lambda x: 1 if x == 'Registered' else 0)
+
+# Select features and target
+features = ['BHK', 'Average Price', 'Location', 'Gym Available', 'Swimming Pool Available',
+            'Water_Availability', 'Power_Backup', 'Near_School', 'RERA Registration Status']
+X = df[features]
+y = df['Demand Score']
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train the neural network model
+model = MLPRegressor(hidden_layer_sizes=(64, 64), max_iter=1000, random_state=42)
+model.fit(X_train, y_train)
+
+# Take user input
+print("📝 Please enter your housing preferences:")
+preferred_bhk = int(input("Enter preferred BHK (e.g., 2): "))
+preferred_location = input("Enter city name (e.g., Pune): ").strip().lower()
+rera_only = input("Do you want RERA registered societies only? (Yes/No): ").strip().lower()
+gym_preference = input("Do you want societies with Gym? (Yes/No): ").strip().lower()
+swimming_pool_preference = input("Do you want societies with Swimming Pool? (Yes/No): ").strip().lower()
+
+# Handle location encoding
+preferred_location = preferred_location.capitalize()
+if preferred_location in label_encoder.classes_:
+    encoded_location = label_encoder.transform([preferred_location])[0]
+else:
+    encoded_location = -1
+
+# Begin filtering with user preferences
+df_filtered = df.copy()
+
+# Step 1: Filter by location
+if encoded_location != -1:
+    df_filtered = df_filtered[df_filtered['Location'] == encoded_location]
+
+# Step 2: Filter by RERA registration status
+df_filtered = df_filtered[df_filtered['RERA Registration Status'] == (1 if rera_only == 'yes' else 0)]
+
+# Step 3: Filter by BHK and apply gym and pool preferences
+df_filtered = df_filtered[
+    (df_filtered['BHK'] == preferred_bhk) &
+    (df_filtered['Gym Available'] == (1 if gym_preference == 'yes' else 0)) &
+    (df_filtered['Swimming Pool Available'] == (1 if swimming_pool_preference == 'yes' else 0))
+]
+
+# Relax filters if no matches found
+relaxed = False
+if df_filtered.empty:
+    print("\n🔍 No exact matches found. Relaxing gym and pool preference...")
+    df_filtered = df_filtered[df_filtered['BHK'] == preferred_bhk]
+    relaxed = True
+
+    if df_filtered.empty:
+        print("📉 Still no match. Relaxing BHK preference...")
+        df_filtered = df.copy()
+        if encoded_location != -1:
+            df_filtered = df_filtered[df_filtered['Location'] == encoded_location]
+        df_filtered = df_filtered[df_filtered['RERA Registration Status'] == (1 if rera_only == 'yes' else 0)]
+        relaxed = True
+
+        if df_filtered.empty:
+            print("🌐 Showing top options across all locations...")
+            df_filtered = df.copy()
+            relaxed = True
+
+# Define adjusted demand score calculation
+def calculate_demand_score(row, max_price, max_rent, gym_preference, swimming_pool_preference):
+    demand_score = 0
+
+    price_factor = (max_price - row['Average Price']) / max_price
+    demand_score += price_factor * 3
+
+    rent_factor = (max_rent - row['Estimated Rent']) / max_rent
+    demand_score += rent_factor * 2
+
+    demand_score += 2 if row['RERA Registration Status'] == 1 else 0
+
+    if gym_preference == 'no' and row['Gym Available'] == 0:
+        demand_score += 1
+    if swimming_pool_preference == 'no' and row['Swimming Pool Available'] == 0:
+        demand_score += 1
+
+    if row['Gym Available'] == 1:
+        demand_score += 1
+    if row['Swimming Pool Available'] == 1:
+        demand_score += 1
+
+    if row['Power_Backup'] == 1:
+        demand_score += 1
+    if row['Water_Availability'] == 1:
+        demand_score += 1
+
+    return demand_score
+
+# Rent Estimation
+def estimate_rent(row, max_price):
+    rent = 0
+    if row['BHK'] == 1:
+        rent = np.random.randint(7000, 15000)
+    elif row['BHK'] == 2:
+        rent = np.random.randint(13000, 20000) if (row['Gym Available'] == 0 or row['Swimming Pool Available'] == 0) else np.random.randint(20000, 25000)
+    elif row['BHK'] == 3:
+        rent = np.random.randint(20000, 35000)
+
+    if row['Gym Available'] == 1:
+        rent *= 1.05
+    if row['Swimming Pool Available'] == 1:
+        rent *= 1.07
+
+    price_factor = (row['Average Price'] / max_price)
+    rent = rent * (1 + price_factor * 0.1)
+
+    return int(rent)
+
+# Apply rent estimation
+max_price = df_filtered['Average Price'].max()
+df_filtered['Estimated Rent'] = df_filtered.apply(lambda row: estimate_rent(row, max_price), axis=1)
+
+# Calculate adjusted demand score
+max_rent = df_filtered['Estimated Rent'].max()
+df_filtered['Adjusted Demand Score'] = df_filtered.apply(lambda row: calculate_demand_score(row, max_price, max_rent, gym_preference, swimming_pool_preference), axis=1)
+
+# Scale to Star Rating (0-5)
+min_score = df_filtered['Adjusted Demand Score'].min()
+max_score = df_filtered['Adjusted Demand Score'].max()
+if max_score != min_score:
+    df_filtered['Star Rating'] = 5 * (df_filtered['Adjusted Demand Score'] - min_score) / (max_score - min_score)
+else:
+    df_filtered['Star Rating'] = 3
+
+# Sort and show top 15
+df_filtered = df_filtered.sort_values(by=['Adjusted Demand Score'], ascending=False)
+top_15 = df_filtered.head(15)
+
+# Display results
+print(f"\n🏘 Top {'Best Alternatives' if relaxed else 'Recommendations'}:\n")
+for index, row in top_15.iterrows():
+    print(f"🏡 Society Name: {row['Society Name']}")
+    print(f"📍 Location: {label_encoder.inverse_transform([row['Location']])[0]}")
+    print(f"🛏 BHK: {row['BHK']} BHK")
+    print(f"💰 Price: ₹ {row['Average Price']}")
+    print(f"📐 Carpet Area: {row.get('Carpet Area Details (sq ft)', 'N/A')} sq ft")
+    print(f"🚿 Bathrooms: {row.get('Bathroom', 'N/A')}")
+    print(f"🚰 Water Availability: {'Yes' if row['Water_Availability'] == 1 else 'No'}")
+    print(f"⚡ Power Backup: {'Yes' if row['Power_Backup'] == 1 else 'No'}")
+    print(f"🏫 Near School: {'Yes' if row['Near_School'] == 1 else 'No'}")
+    print(f"🏋 Gym Available: {'Yes' if row['Gym Available'] == 1 else 'No'}")
+    print(f"🏊 Swimming Pool Available: {'Yes' if row['Swimming Pool Available'] == 1 else 'No'}")
+    print(f"✅ RERA Registered: {'Yes' if row['RERA Registration Status'] == 1 else 'No'}")
+    print(f"🌟 Star Rating: {round(row['Star Rating'], 1)} ⭐ out of 5")
+    print(f"🏠 Estimated Rent: ₹ {row['Estimated Rent']} per month")
+    print("------------------------------------------------")
+
+joblib.dump(model, '/content/drive/MyDrive/SY/CEP/CEP/model.pkl')
+joblib.dump(label_encoder, '/content/drive/MyDrive/SY/CEP/CEP/encoder.pkl')
